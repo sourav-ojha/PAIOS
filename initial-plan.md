@@ -1,7 +1,3 @@
-Here's the direction I'd take. Rather than giving Claude a "build prompt", I'd give it a **Product Requirements & Architecture Constitution**. This changes Claude's role from "code generator" to **Lead Architect + Lead Engineer**.
-
----
-
 # Personal AI Operating System (PAIOS)
 
 ## Product Vision & Architecture Constitution
