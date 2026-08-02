@@ -259,10 +259,12 @@ The budget estimate below assumed paid API calls throughout. In practice, `cos a
 | Provider | Cost | Privacy | Verified quality (2026-08-02) |
 |---|---|---|---|
 | `ollama` (default) | Free, unlimited | Fully local — nothing leaves the machine, matches the workspace-isolation principle | **Unreliable** at 1B–12B on grounded extraction — see above |
-| `gemini` | Free tier (generous quota, 1M context) | Cloud — leaves the machine | **Correct**, fully grounded, on the test case |
+| `gemini` | Free tier, per-model daily cap (see below), 1M context | Cloud — leaves the machine | **Correct**, fully grounded, on the test case |
 | `anthropic` | Paid | Cloud | Not re-tested this pass; known-good from earlier sessions |
 
 Default stays `ollama` deliberately — client/employer workspace data should never leave the machine by default (§6 T2/T3). `gemini` is an explicit opt-in per call (`cos ask --provider gemini "..."`) for when accuracy matters more than that guarantee, e.g. Phase 0 testing against your own non-sensitive corpus. This tiering — not a flat "use a mid-size model" — is the real cost strategy going forward.
+
+**Gemini free tier is not "generous" — it's per-model and per-day, and one eval run can exhaust it.** Running the 20-case golden set (§5, G7) against `gemini-3.5-flash` hit `GenerateRequestsPerDayPerProjectPerModel-FreeTier` (quota value 20) after 14 calls — confirmed via the API's own 429 response, not an estimate. That leaves near-zero daily quota for `cos brief` if both share the same model. Switched the default `GEMINI_MODEL` to `gemini-3.5-flash-lite`: flash-lite tiers carry a materially higher free RPD than plain flash across every Gemini generation per Google's public rate-limit docs (exact figures churn — Google's page is the source of truth, not this doc). The quota is scoped per exact model string, so `cos eval` and `cos brief` sharing one model still share one daily budget; if that becomes a problem, point one at a different model via `GEMINI_MODEL`/`--provider` rather than assuming headroom.
 
 Enforcement, not intention:
 - Per-workspace monthly cap in `workspaces.yaml`; Router checks before every call.

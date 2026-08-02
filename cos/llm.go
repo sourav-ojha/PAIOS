@@ -45,7 +45,15 @@ func synthesizerFromEnv(provider string) (synthesizer, error) {
 		}
 		model := os.Getenv("GEMINI_MODEL")
 		if model == "" {
-			model = "gemini-3.5-flash" // free tier, 1M context, current-gen
+			// flash-lite over flash: verified 2026-08-02/03 that plain
+			// gemini-3.5-flash's free tier caps at 20 requests/day (hit via
+			// GenerateRequestsPerDayPerProjectPerModel-FreeTier during the
+			// eval harness run), too low for eval (20 cases) + daily brief
+			// combined. Flash-lite tiers consistently carry a materially
+			// higher free RPD across Gemini generations per Google's public
+			// rate-limit docs — confirm actual cap for your key/region
+			// before relying on it for anything time-critical.
+			model = "gemini-3.5-flash-lite"
 		}
 		return &geminiSynth{apiKey: apiKey, model: model}, nil
 	default:

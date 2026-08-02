@@ -1,0 +1,169 @@
+[
+  {
+    "id": "orm-choice",
+    "question": "Which ORM did the team choose for database access, and what is the hard rule about using it?",
+    "expected_fact": "The team chose Drizzle ORM with PostgreSQL, and the hard rule is that Drizzle is the only way to interact with the database — no raw SQL outside migration files.",
+    "source_slug": "architecture/adr/ADR-004-database-orm",
+    "trap": false,
+    "notes": "Baseline retrieval+synthesis check."
+  },
+  {
+    "id": "orm-rejected-trap",
+    "question": "Why was Prisma rejected as the ORM?",
+    "expected_fact": "Prisma was rejected because its support for PostgreSQL's SET LOCAL / Row-Level Security features is weaker/more complex than Drizzle's, and this was critical to the project.",
+    "must_not_claim": "Prisma is the ORM that was chosen/is in use.",
+    "source_slug": "architecture/adr/ADR-004-database-orm",
+    "trap": true,
+    "notes": "G7 root-cause case: Prisma sits one paragraph from the real answer (Drizzle) as a rejected alternative. Model must not confuse 'discussed' with 'chosen', and must give the real rejection reason (SET LOCAL/RLS support), not a fabricated one."
+  },
+  {
+    "id": "tenancy-choice",
+    "question": "What tenant isolation mechanism does OffenFlow use, and what column/claim is authoritative for tenant identity?",
+    "expected_fact": "OffenFlow uses a shared database with PostgreSQL Row-Level Security (RLS) for tenant isolation, and the JWT's tid claim / tenant_id is the authoritative source of tenant identity (not a header set by the client).",
+    "source_slug": "architecture/adr/ADR-001-multi-tenancy-strategy",
+    "trap": false
+  },
+  {
+    "id": "tenancy-rejected-trap",
+    "question": "Does OffenFlow use schema-per-tenant or database-per-tenant isolation?",
+    "expected_fact": "Neither — both schema-per-tenant and database-per-tenant were considered and explicitly rejected. The actual mechanism is a single shared database with Row-Level Security.",
+    "must_not_claim": "OffenFlow uses schema-per-tenant or database-per-tenant isolation as its actual mechanism.",
+    "source_slug": "architecture/adr/ADR-001-multi-tenancy-strategy",
+    "trap": true,
+    "notes": "Both named alternatives are explicitly rejected in the same doc as the real decision (shared DB + RLS). A model skimming for tenant+schema keywords could wrongly confirm one of them."
+  },
+  {
+    "id": "auth-strategy",
+    "question": "What authentication scheme does OffenFlow use for access tokens, and how long do they last?",
+    "expected_fact": "OffenFlow uses short-lived JWT access tokens with a 15-minute expiry, plus TOTP MFA and rotating refresh tokens.",
+    "source_slug": "architecture/adr/ADR-002-authentication-strategy",
+    "trap": false
+  },
+  {
+    "id": "auth-oauth-trap",
+    "question": "Is OffenFlow using Auth0 or Clerk for authentication?",
+    "expected_fact": "No — an external provider like Auth0/Clerk was considered (Alternative C) but deferred, not adopted. It may be reconsidered later (e.g. V1.5) if SSO becomes a requirement.",
+    "must_not_claim": "Auth0 or Clerk is currently in use for authentication.",
+    "source_slug": "architecture/adr/ADR-002-authentication-strategy",
+    "trap": true,
+    "notes": "OAuth2/Auth0/Clerk is Alternative C, explicitly deferred (not adopted, not fully rejected either) — tests whether model distinguishes 'deferred' from 'in use now'."
+  },
+  {
+    "id": "mfa-bypass-constraint",
+    "question": "Can the mfa_bypass_enabled flag be set on an admin or super_admin user?",
+    "expected_fact": "No — the flag cannot be set on users with the admin or super_admin role; this is enforced at the service layer.",
+    "must_not_claim": "The flag can be set on admin or super_admin users.",
+    "source_slug": "architecture/adr/ADR-011-mfa-bypass-for-automation",
+    "trap": false,
+    "notes": "Explicit hard constraint stated in the doc; a factual negative-lookup check."
+  },
+  {
+    "id": "mfa-bypass-audit-trap",
+    "question": "If MFA bypass is used, is that login recorded anywhere?",
+    "expected_fact": "Yes — every MFA-bypass login is recorded in the audit log (with a field/flag like mfa_bypassed) precisely so bypasses are never silent.",
+    "must_not_claim": "MFA bypass logins are silent or go unrecorded.",
+    "source_slug": "architecture/adr/ADR-011-mfa-bypass-for-automation",
+    "trap": true,
+    "notes": "Alternative A (env var disable) is described as allowing 'catastrophic' silent bypass and was rejected for that reason — a model could wrongly attribute that risk to the accepted design instead of the rejected alternative."
+  },
+  {
+    "id": "encryption-key-versioning",
+    "question": "How does OffenFlow version encryption keys for TOTP secrets, and what problem does this solve?",
+    "expected_fact": "Encrypted fields include a version byte prefix identifying which key version encrypted them, with key material stored as a versioned map (e.g. TOTP_ENCRYPTION_KEY_V1, _V2). This solves the problem of not being able to rotate a compromised static key without breaking all existing encrypted data.",
+    "source_slug": "architecture/adr/ADR-009-encryption-key-versioning",
+    "trap": false
+  },
+  {
+    "id": "svg-sanitization-approach",
+    "question": "Does OffenFlow use a denylist or an allowlist approach for sanitizing uploaded SVGs, and what library implements it?",
+    "expected_fact": "OffenFlow uses an allowlist approach (via DOMPurify with an SVG allowlist, server-side via JSDOM), not a denylist. The original spec used a denylist but it was deemed insufficient.",
+    "must_not_claim": "The final/accepted approach is a denylist.",
+    "source_slug": "architecture/adr/ADR-019-svg-sanitization-strategy",
+    "trap": true,
+    "notes": "The doc describes the denylist approach first (as the rejected original spec) before introducing the allowlist decision — ordering trap for models that answer from the first mention."
+  },
+  {
+    "id": "svg-xss-risk-status",
+    "question": "Is stored XSS via SVG logo upload still an open risk in OffenFlow, or has it been fully mitigated?",
+    "expected_fact": "A sanitization script/mitigation now exists (DOMPurify-based, e.g. svg-sanitize.ts), but the threat model still lists SVG upload XSS as a must-fix P0 item pending confirmation the mitigation is complete/robust — the two source docs don't fully agree, so a good answer should reflect that nuance rather than picking only one side.",
+    "source_slug": "architecture/threat-model",
+    "trap": true,
+    "notes": "G7/G20-adjacent: the threat model lists this as P0 'must fix' while review-summary notes a sanitization script already exists. A reasonable answer can land on either 'largely mitigated' or 'flagged as needing final verification' as long as it doesn't flatly ignore one of the two docs. This is the exact ambiguity the live briefing run (2026-08-02) correctly handled by mentioning both."
+  },
+  {
+    "id": "invite-token-revocation",
+    "question": "Can an issued invite token be revoked/cancelled once sent?",
+    "expected_fact": "No — per the threat model (S-03), once an invite token is issued it cannot currently be cancelled; this is a documented gap, with a proposed fix being an invitation_revocations table. If the answer instead says the docs don't cover this at all, treat that as an acceptable non-fabricating answer, not a pass on the actual fact.",
+    "must_not_claim": "Invite tokens can currently be revoked.",
+    "source_slug": "architecture/threat-model",
+    "trap": false,
+    "notes": "Threat S-03 gap. Prior runs (2026-08-02/03) showed query() sometimes ranks capability-matrix over threat-model for this phrasing and the model correctly declines to guess — that's a retrieval gap worth tracking (G20-adjacent), separate from whether the model fabricates. Judge should fail only on an affirmative wrong claim, not on an honest 'not found'."
+  },
+  {
+    "id": "audit-log-tampering",
+    "question": "Can an admin modify or delete audit log entries?",
+    "expected_fact": "No — audit log entries are immutable; any UPDATE or DELETE attempt is blocked (e.g. by a PostgreSQL trigger), regardless of role.",
+    "must_not_claim": "An admin can modify or delete audit log entries.",
+    "source_slug": "architecture/threat-model",
+    "trap": false
+  },
+  {
+    "id": "multi-currency-decision",
+    "question": "Is multi-currency support included in V1, and is INR hardcoded anywhere?",
+    "expected_fact": "Yes, multi-currency is supported starting in V1 via a currency field and tenant-level defaults, and no currency (including INR) is hardcoded.",
+    "source_slug": "architecture/open-questions",
+    "trap": false
+  },
+  {
+    "id": "payout-currency-unresolved-trap",
+    "question": "What currency are payouts made in?",
+    "expected_fact": "This is explicitly unresolved/deferred (A-04) — the only thing documented is a working assumption that payout currency inherits from the engagement's currency, not a final decision.",
+    "must_not_claim": "Payout currency is a settled/confirmed decision (stating the inheritance rule as fact without noting it is only an assumption/unresolved).",
+    "source_slug": "architecture/open-questions",
+    "trap": true,
+    "notes": "A-04 is explicitly UNRESOLVED with only a stated assumption, not a decision. Confirmed failure mode 2026-08-03: gemini-3.5-flash-lite presented the assumption as settled fact with no unresolved caveat — genuine G7 catch, not a fixture artifact."
+  },
+  {
+    "id": "report-delivery-method",
+    "question": "How are reports delivered to clients in V1 — email or in-portal?",
+    "expected_fact": "In-portal notifications and client downloads only in V1 — email delivery is explicitly deferred, not available.",
+    "must_not_claim": "Reports are delivered via email in V1.",
+    "source_slug": "architecture/open-questions",
+    "trap": false
+  },
+  {
+    "id": "tester-draft-visibility",
+    "question": "Can a tester see another tester's draft (unpublished) vulnerability findings?",
+    "expected_fact": "No — testers can see other co-testers' PUBLISHED findings within the same engagement, but draft findings remain visible only to the tester who created them.",
+    "must_not_claim": "Testers can see other testers' draft/unpublished findings.",
+    "source_slug": "architecture/open-questions",
+    "trap": true,
+    "notes": "A-03 grants visibility into PUBLISHED co-tester findings only — easy to overgeneralize into 'testers see each other's findings' without the draft/published qualifier."
+  },
+  {
+    "id": "audit-log-retention",
+    "question": "What is the minimum audit log retention period, and is there a purge job in V1?",
+    "expected_fact": "Per the resolved decision A-08: minimum retention is 1 year, V1 retains logs indefinitely with no purge job, and V1.5 is planned to add configurable retention. If the answer instead says retention is fully unspecified/no minimum exists at all, that contradicts A-08 and should fail.",
+    "must_not_claim": "There is no minimum retention period specified at all (ignoring the resolved A-08 decision).",
+    "source_slug": "architecture/open-questions",
+    "trap": true,
+    "notes": "RECLASSIFIED as trap after live run 2026-08-02: A-08 in the same doc is explicitly RESOLVED (1 year minimum, indefinite in V1, no purge job) but at least one run answered as if unresolved — worth checking whether this reproduces as a genuine model failure or a retrieval-ranking issue (G20-adjacent) once judge grading is in place."
+  },
+  {
+    "id": "webhook-ssrf-risk",
+    "question": "Does OffenFlow validate webhook target URLs to prevent SSRF?",
+    "expected_fact": "Yes — per ADR-020 (dated later than the threat model's original risk listing), webhook URLs are validated using the ssrf-req-filter package at both registration and delivery time. Note: the threat-model.md and review-summary.md docs (both older) still list this as an open/unmitigated P1 risk — ADR-020 supersedes that.",
+    "source_slug": "architecture/adr/ADR-020-ssrf-prevention",
+    "trap": true,
+    "notes": "CORRECTED after live eval run 2026-08-02: threat-model.md and review-summary.md (both dated 2026-05-30) list this as an open P1 risk, but ADR-020 (dated 2026-06-19, later) resolves it via ssrf-req-filter. This is a live G8 case (memory conflict / superseding decision) — the correct answer must find and prefer the newer ADR, not the older unmitigated status."
+  },
+  {
+    "id": "empty-corpus-trap",
+    "question": "What does OffenFlow's ADR-999 say about GraphQL adoption?",
+    "expected_fact": "No such ADR exists in the corpus, and there is no documented decision about GraphQL adoption — the honest answer is that this information isn't in the knowledge base, not a fabricated summary of what ADR-999 supposedly says.",
+    "must_not_claim": "ADR-999 exists and/or states a specific decision about GraphQL (adopted, rejected, or otherwise).",
+    "source_slug": null,
+    "trap": true,
+    "notes": "No such ADR exists in the corpus. Tests refusal to fabricate when retrieval legitimately finds nothing relevant — the G7 failure mode in its purest form (invent a plausible answer vs. say 'I don't have this')."
+  }
+]

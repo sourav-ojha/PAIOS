@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // topPagesForContext caps how many full pages we fetch and inline — this is
@@ -105,9 +107,84 @@ func runAsk(args []string) error {
 	return nil
 }
 
+// briefQuestion stands in for real multi-source aggregation (Phase 4+
+// ingestion, per docs/03-gap-analysis.md G6) — Phase 0 has one brain fed by
+// one imported corpus, so a single broad query is the whole retrieval step.
+const briefQuestion = "What are the most important recent decisions, open questions, and risks recorded in this knowledge base?"
+
+// briefProvider defaults to gemini, not ollama: three local models (1B/7B/
+// 12B) all fabricated on a grounded-extraction test (docs/03-gap-analysis.md
+// G7) and a briefing is exactly the unsupervised-trust case that failure
+// mode is worst for. Override with --provider if you've run the eval
+// harness (G7) against a specific model and trust it.
+const briefProvider = "gemini"
+
+// runBrief produces the Phase 0 kill-gate deliverable: a briefing citing
+// real sources from the brain. Acceptance test is manual, not automated —
+// docs/02-technical-design.md §8: "references >=3 source docs with
+// citations" and "this told me something I hadn't already tracked."
 func runBrief(args []string) error {
-	// TODO(phase 0): same shape as runAsk but with a fixed briefing prompt,
-	// write output to brains/shared/briefings/YYYY-MM-DD.md as well as stdout.
-	// Deferred until `ask` is validated as useful — see docs/02-technical-design.md §8.
-	return fmt.Errorf("not implemented yet — use 'cos ask' for now")
+	provider, args := parseProvider(args)
+	if provider == "" {
+		provider = briefProvider
+	}
+
+	gb, err := gbrainClientFromEnv()
+	if err != nil {
+		return err
+	}
+	hits, err := gb.query(briefQuestion)
+	if err != nil {
+		return fmt.Errorf("gbrain query: %w", err)
+	}
+	if len(hits) == 0 {
+		fmt.Println("No content in the brain yet — nothing to brief on.")
+		return nil
+	}
+	if len(hits) > topPagesForContext {
+		hits = hits[:topPagesForContext]
+	}
+
+	seen := map[string]bool{}
+	var fullPages []*gbrainFullPage
+	for _, h := range hits {
+		if seen[h.Slug] {
+			continue
+		}
+		seen[h.Slug] = true
+		page, err := gb.getPage(h.Slug)
+		if err != nil {
+			return fmt.Errorf("gbrain get_page %q: %w", h.Slug, err)
+		}
+		fullPages = append(fullPages, page)
+	}
+
+	synth, err := synthesizerFromEnv(provider)
+	if err != nil {
+		return err
+	}
+
+	prompt := "Write a daily briefing for the operator of this knowledge base. " +
+		"Structure it as: Recent Decisions, Open Questions, Risks. " +
+		"Under each section, cite the doc slug for every claim. " +
+		"If a section has nothing relevant in the docs, write \"Nothing new\" rather than inventing content."
+	answer, err := synth.synthesize(context.Background(), buildContext(fullPages), prompt)
+	if err != nil {
+		return err
+	}
+
+	date := time.Now().Format("2006-01-02")
+	out := fmt.Sprintf("# Briefing — %s\n\n%s\n", date, strings.TrimSpace(answer))
+	fmt.Print(out)
+
+	dir := "../brains/shared/briefings"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create briefings dir: %w", err)
+	}
+	path := filepath.Join(dir, date+".md")
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("write briefing: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "\nwritten to %s\n", path)
+	return nil
 }

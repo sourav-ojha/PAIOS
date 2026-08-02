@@ -25,6 +25,8 @@ func main() {
 		err = runBrief(os.Args[2:])
 	case "ask":
 		err = runAsk(os.Args[2:])
+	case "eval":
+		err = runEval(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 		os.Exit(1)
