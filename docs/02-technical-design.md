@@ -177,6 +177,8 @@ Any implementation satisfying this is an executor. Phase 5 ships one adapter (Cl
 
 Note `context_refs` are **references, not content**. The executor fetches what it needs. This is the single biggest token-cost lever in the design: it prevents the "send the whole repo" failure mode §15 of the original doc warns about but provides no mechanism against.
 
+**Resolving a reference means the full page, never a search chunk.** Verified 2026-08-02: GBrain's `query` tool returns ranked `chunk_text` fragments that can cut off mid-document — one case truncated an ADR right after its frontmatter, before the "Alternatives Considered" section that held the actual answer. A model given only that chunk fabricated plausible-sounding reasoning to fill the gap. Fix, now standing practice for any code (`cos` or a future executor) that resolves a `context_ref`: call `query` for ranking only, then `get_page` on each resulting slug and use its `compiled_truth` field (the full document body — not `content`, despite the name) for anything that gets shown to a model or a human.
+
 ### 3.5 Agents
 
 Two roles, per Architecture Review §3.
@@ -248,6 +250,20 @@ The nine questions from `initial-plan.md` §11 become a checklist in the idea fi
 | Code execution / review | large | Where quality dominates cost |
 | Anything over budget | **refuse** | Fails closed |
 
+**"Mid-tier" is a capability claim, not a size — verify it, don't assume it.** Tested 2026-08-02 against a fully-grounded, single-fact extraction question (source doc's own title contained the answer): `gemma3:1b` and `qwen2.5-coder:7b` fabricated wrong answers with confidence; `gemma4:12b` said "not mentioned" for a fact stated in the title. All three had correct, complete retrieved context — this was a synthesis failure, not a retrieval failure. Gemini 3.5 Flash (free tier) answered correctly, fully grounded, on the first attempt. **Treat any local-model answer as unverified until spot-checked; do not promote a local model to "trusted default" without a passing run through the eval set in §5.1.**
+
+### 5.1 Free-tier provider strategy — not in the original cost plan, added after Phase 0 testing
+
+The budget estimate below assumed paid API calls throughout. In practice, `cos ask` ships with three interchangeable providers behind one `synthesizer` interface, selected by `--provider` (default `ollama`):
+
+| Provider | Cost | Privacy | Verified quality (2026-08-02) |
+|---|---|---|---|
+| `ollama` (default) | Free, unlimited | Fully local — nothing leaves the machine, matches the workspace-isolation principle | **Unreliable** at 1B–12B on grounded extraction — see above |
+| `gemini` | Free tier (generous quota, 1M context) | Cloud — leaves the machine | **Correct**, fully grounded, on the test case |
+| `anthropic` | Paid | Cloud | Not re-tested this pass; known-good from earlier sessions |
+
+Default stays `ollama` deliberately — client/employer workspace data should never leave the machine by default (§6 T2/T3). `gemini` is an explicit opt-in per call (`cos ask --provider gemini "..."`) for when accuracy matters more than that guarantee, e.g. Phase 0 testing against your own non-sensitive corpus. This tiering — not a flat "use a mid-size model" — is the real cost strategy going forward.
+
 Enforcement, not intention:
 - Per-workspace monthly cap in `workspaces.yaml`; Router checks before every call.
 - Every call logged to `audit.jsonl` with cost. `cos cost --month` reports actuals.
@@ -255,7 +271,7 @@ Enforcement, not intention:
 - `context_refs` over inlined content (§3.4).
 - Escalation to a larger model requires an explicit rule, never a model's self-assessment.
 
-**Budget estimate, Phase 0–1** (single operator, one briefing/day, ~20 asks/day): order of **$15–40/month**. Stated as an estimate to be replaced by measured `audit.jsonl` data after week 2 — do not treat as a commitment.
+**Budget estimate, Phase 0–1** (single operator, one briefing/day, ~20 asks/day): order of **$15–40/month if run entirely on Anthropic**; near-$0 if Gemini free tier absorbs the volume and Ollama handles the rest. Stated as an estimate to be replaced by measured `audit.jsonl` data after week 2 — do not treat as a commitment.
 
 ---
 
@@ -300,6 +316,10 @@ services:
 - **Postgres data → named volume**, not a bind mount and never anonymous. `docker compose down` (no `-v`) leaves it untouched; only an explicit `docker compose down -v` destroys it — a different, deliberate command, not an accident of restart.
 - **Brain markdown → bind mount to a host path** (`./brains/<workspace>/`), because that path is a git repo you back up and push independently of Docker entirely. This is what makes the portability test (§3.3) meaningful — the truth lives on the host filesystem, containers are disposable compute over it.
 - `docker compose down && docker compose up` — or a full image rebuild — must leave both untouched. Only `-v` or `rm -rf ./brains` destroys data, and both are things you'd do on purpose.
+
+**Named-volume persistence has a boundary "restart-safe" doesn't cover: the Docker *engine* itself.** Verified 2026-08-02 — switching from Docker Desktop to OrbStack left `chief-staff_pg_data` as a fresh, empty volume under the new engine despite the identical name; Docker Desktop's data wasn't migrated automatically and became unreachable once its daemon stopped. This is not a bug in the compose file — it's a real gap in "the volume survives" as a blanket claim. What actually prevented data loss was the design principle in the paragraph above: the Postgres index is disposable, `brains/<workspace>/` on the host filesystem is not. Recovery was `gbrain import` from the git repo, a few minutes, zero data loss of anything that mattered. Treat any engine change (Docker Desktop ↔ OrbStack ↔ Colima, or a host migration) as equivalent to a fresh install: expect to re-run `gbrain init` + `import`, and re-mint any per-client tokens (`gbrain auth create ...`) since they live in the now-empty `access_tokens` table.
+
+The real `gbrain-shared` service also needs the OAuth bootstrap variable, not a static token — the compose sketch above is simplified for readability; the actual `docker-compose.yml` sets `GBRAIN_ADMIN_BOOTSTRAP_TOKEN` (see `docker/gbrain-entrypoint.sh`) and mints scoped per-client tokens after boot via `gbrain auth create <client>`, per the OAuth 2.1 flow `gbrain serve --http` actually implements.
 
 ---
 

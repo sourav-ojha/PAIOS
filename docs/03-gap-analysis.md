@@ -35,6 +35,11 @@ The plan ingests GitHub issues, email, Slack, Discord, and web content (§12) �
 
 **Close it:** hard per-workspace monthly cap checked before every call, fails closed. TDD §5.
 
+### G7. Synthesis quality has no evaluation harness — promoted from P1, confirmed 2026-08-02
+Originally flagged as a hypothetical ("every prompt tweak and every reindex is a blind change"). No longer hypothetical: three free local models (`gemma3:1b`, `qwen2.5-coder:7b`, `gemma4:12b`) were tested against one fully-grounded extraction question and all three got it wrong — two fabricated confident wrong answers, one denied a fact stated in the source doc's own title. Retrieval was correct in every case; this was caught only because the answer happened to be checked by hand against the source ADR. Without that check, a wrong answer ships silently in a briefing — exactly the failure mode this project exists to prevent (initial-plan.md §10: "trust its recommendations").
+
+**Close it:** 20 golden question→expected-answer pairs, not just question→expected-doc — retrieval-only eval isn't enough, the finding was a synthesis failure with correct retrieval. Include at least one "trap" question per doc type modeled on the real failure: a plausible-but-wrong alternative sitting near the correct answer in the same source (here, "Prisma" listed as a rejected alternative one paragraph from "Drizzle," the actual answer). Run before promoting any model — local or cloud — to default. TDD §5/§5.1.
+
 ---
 
 ## P1 — will cause rework or measurable cost
@@ -43,11 +48,6 @@ The plan ingests GitHub issues, email, Slack, Discord, and web content (§12) �
 §12 names 12 source types. No mention of: incremental sync vs. full re-index, deletion propagation (a doc deleted at source stays in the index forever → the briefing cites deleted facts), rate limits, auth token rotation, or what happens when a connector breaks silently. Each connector is a permanent maintenance liability; twelve is a part-time job.
 
 **Close it:** one connector in Phase 4, chosen by what the briefing starved for. Design deletion propagation before the second.
-
-### G7. Retrieval quality has no evaluation harness
-The system's usefulness *is* retrieval quality, and there's no way to tell if a change made it worse. Every prompt tweak and every reindex is then a blind change.
-
-**Close it:** 20 golden question→expected-doc pairs in a file. Run before/after any knowledge-layer change. This is an afternoon of work and it's the difference between engineering and guessing.
 
 ### G8. Nothing describes memory *conflict* resolution
 §8/§9 cover categories and expiry. Neither covers: two documents state contradicting facts; a decision is reversed (Redis rejected in March, adopted in July — §8's own example); a fact is superseded but not deleted. The briefing will confidently state stale conclusions. Temporal-graph systems (Graphiti) exist specifically for this; GBrain's model is weaker here.
@@ -73,6 +73,16 @@ Nothing on logs, traces, or "why did the briefing say that?" Debugging an LLM sy
 Nine artifacts demanded per phase (risk assessment, cost estimation, rollback strategy, testing strategy…). Eight phases × nine artifacts = 72 documents. This will not happen, and pretending it will means none of them get done properly.
 
 **Close it:** per phase, one page: what shipped, what it cost, how to undo it, acceptance results. ADRs for decisions only.
+
+### G20. Search-result chunks are not the same as page content — found 2026-08-02
+Not anticipated in the original plan at all. GBrain's `query` tool ranks and returns `chunk_text` fragments for relevance scoring; these can cut off mid-document (observed: an ADR's chunk ended right after its frontmatter, before the section holding the actual decision reasoning). Code that synthesizes answers directly from `chunk_text` is reading a fragment, not the document, and a model will fabricate plausible content to fill the gap rather than say "I don't have this."
+
+**Closed:** resolve every retrieved slug through `get_page` (full `compiled_truth`) before it reaches a model or a human. TDD §3.4. Applies to any future code that touches GBrain's `query` results, not just `cos`.
+
+### G21. "Survives restarts" and "survives an infra change" are different claims — found 2026-08-02
+The original persistence design (TDD §7) proved out named volumes surviving `docker compose down`/`up`. It did not anticipate — and got tested by — a Docker engine swap (Docker Desktop → OrbStack) mid-project. The named volume did not carry over; a fresh empty one was created under the same name. No data was actually lost, because brain markdown lives on the host filesystem independent of Docker, but the recovery step (re-import, re-mint tokens) is real operational work that wasn't documented as something to expect.
+
+**Closed:** TDD §7 now states the boundary explicitly. Worth generalizing: any host migration, engine swap, or "reinstall Docker to fix something" event should be treated as equivalent to a fresh install for every containerized service — the only thing that should survive by default is what's on the host filesystem (bind mounts, git repos), never what's in a named volume.
 
 ---
 
