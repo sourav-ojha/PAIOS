@@ -38,8 +38,18 @@ func synthesizerFromEnv(provider string) (synthesizer, error) {
 			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
 		}
 		return &anthropicSynth{apiKey: apiKey}, nil
+	case "gemini":
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("GEMINI_API_KEY not set")
+		}
+		model := os.Getenv("GEMINI_MODEL")
+		if model == "" {
+			model = "gemini-3.5-flash" // free tier, 1M context, current-gen
+		}
+		return &geminiSynth{apiKey: apiKey, model: model}, nil
 	default:
-		return nil, fmt.Errorf("unknown provider %q (use ollama or anthropic)", provider)
+		return nil, fmt.Errorf("unknown provider %q (use ollama, anthropic, or gemini)", provider)
 	}
 }
 
