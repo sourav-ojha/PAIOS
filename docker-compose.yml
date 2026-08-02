@@ -1,0 +1,57 @@
+volumes:
+  pg_data: {}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gbrain
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: gbrain_shared
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gbrain"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "127.0.0.1:5434:5432" # 5432/5433 taken by other local projects (offenflow, bl-postgres)
+
+  gbrain-shared:
+    build:
+      context: ./docker
+      dockerfile: gbrain.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # gbrain serve --http requires Postgres (no PGLite support) — access_tokens
+      # table only exists there. See docs/mcp/DEPLOY.md.
+      DATABASE_URL: postgresql://gbrain:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/gbrain_shared
+      # Real OAuth 2.1 admin bootstrap, not a static bearer token (that was a
+      # wrong guess in an earlier version of this file). This env var pins
+      # the admin token across restarts — without it gbrain mints a fresh
+      # one on every start and only prints it on a TTY, which Docker isn't.
+      GBRAIN_ADMIN_BOOTSTRAP_TOKEN: ${GBRAIN_ADMIN_BOOTSTRAP_TOKEN:?set in .env}
+      # Local embeddings via the host's already-running Ollama (bge-m3, free,
+      # no API key). host.docker.internal resolves to the host from inside
+      # the container on Docker Desktop (macOS/Windows).
+      OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
+      GBRAIN_EMBEDDING_MODEL: ollama:bge-m3
+      GBRAIN_EMBEDDING_DIMENSIONS: "1024"
+    volumes:
+      - ./brains/shared:/brain # host path = git repo = source of truth
+    ports:
+      - "127.0.0.1:7333:7333"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Linux Docker needs this explicitly
+
+  # cos: built and run locally for Phase 0 (`go run ./cos`), not yet containerized.
+  # Talks to gbrain-shared via a per-client token minted with:
+  #   docker compose exec gbrain-shared gbrain auth create cos
+  # (admin bootstrap token authenticates that one call, then is not needed
+  # again — cos should never hold the admin token itself).
+  # Added to compose once the CLI is stable enough to freeze into an image.

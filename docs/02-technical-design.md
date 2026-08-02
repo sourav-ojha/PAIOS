@@ -62,7 +62,7 @@ Five components. Two of them are third-party. The two we write (`cos`, Router) a
 
 ### 3.1 `cos` — CLI
 
-Single Python entrypoint (Typer). Stateless. Three commands for Phase 0–1:
+**Language: Go.** Decided 2026-07-30 — see rationale below. Single static binary, `cobra` for commands. Stateless. Three commands for Phase 0–1:
 
 ```
 cos brief [--workspace W]      # today's briefing → stdout + markdown file
@@ -71,6 +71,23 @@ cos idea "raw thought"         # starts/continues incubation interview
 ```
 
 Why CLI first: zero UI cost, trivially cron-able, and the output is markdown that lands in git — so the briefing is itself a durable artifact, not an ephemeral chat.
+
+**Why Go, not Python — decided, not defaulted.**
+
+| | Go | Python |
+|---|---|---|
+| Docker image | ~15-20MB, static binary | ~150MB+ with deps |
+| Startup / memory | Sub-second, 30-60MB RSS for concurrent sessions | Slower cold start, heavier interpreter footprint |
+| Distribution | Single binary, no venv/deps to break across machines | Dependency drift between laptop and VPS is a real recurring cost |
+| Anthropic SDK | Official `anthropic-sdk-go`, first-class | Official, first-class (no advantage either way) |
+| Typed contracts | `TaskSpec`/`Result` (§3.4) as structs — compiler enforces the boundary | Same via Pydantic/dataclass, but unenforced at call sites without discipline |
+| Agent-authored code quality | 2026 field reports: Claude/agents produce valid Go in one shot more consistently — narrower idiom, one formatter (`gofmt`), one way to do most things | More stylistic variance to review |
+| Framework temptation | Ecosystem is infra-shaped (Genkit-Go, ADK-Go); we're not using a framework anyway | LangChain/LlamaIndex gravity is strong and directly conflicts with §4's "no agent framework" |
+| Research/ML-shaped work | Weak — not relevant here, no training/eval workloads in `cos` | Strong, but out of scope for this component |
+
+Router does none of the things Python is actually good at (no data science, no training, no notebook-shaped exploration). It's a CLI that resolves a workspace, checks a budget, calls an HTTP API (GBrain), calls an HTTP API (Anthropic), and writes a log line. That's Go's exact profile. **GBrain itself is untouched** — it stays on its native Node/Bun runtime in its own container; `cos` talks to it over the MCP/HTTP interface it already exposes. Language choice for `cos` has zero bearing on GBrain's internals — this is a decision about our ~600 lines, not a rewrite of anyone else's project.
+
+Dependency policy: stdlib `net/http` + `pgx` (Postgres) + `anthropic-sdk-go` + `cobra` (CLI) + `yaml.v3`. No LangChainGo — 170+ transitive deps and no MCP support as of mid-2026 buys nothing we need.
 
 ### 3.2 Router — the only bespoke logic worth writing
 
@@ -133,25 +150,28 @@ If this test ever fails, we have lock-in and must fix it before shipping anythin
 
 **This is the most important artifact in the design.** It is what makes "the execution engine is replaceable" true rather than aspirational. Write it before any executor code.
 
-```python
-@dataclass(frozen=True)
-class TaskSpec:
-    workspace_id: str
-    goal: str                      # natural language
-    context_refs: list[str]        # brain doc ids — NOT inlined content
-    allowed_tools: list[str]       # explicit allowlist; empty = read-only
-    budget_usd: float              # hard cap for this task
-    repo: str | None = None
-    egress: Literal["deny", "allowlist"] = "deny"
+```go
+type TaskSpec struct {
+    WorkspaceID  string   `json:"workspace_id"`
+    Goal         string   `json:"goal"`                // natural language
+    ContextRefs  []string `json:"context_refs"`         // brain doc ids — NOT inlined content
+    AllowedTools []string `json:"allowed_tools"`         // explicit allowlist; empty = read-only
+    BudgetUSD    float64  `json:"budget_usd"`            // hard cap for this task
+    Repo         string   `json:"repo,omitempty"`
+    Egress       string   `json:"egress"`                // "deny" | "allowlist"
+}
 
-@dataclass(frozen=True)
-class Result:
-    status: Literal["ok", "failed", "budget_exceeded", "needs_human"]
-    artifacts: list[Artifact]      # diffs, docs, PR urls
-    transcript_path: str
-    cost_usd: float
-    tokens: tuple[int, int]
+type Result struct {
+    Status         string     `json:"status"` // "ok" | "failed" | "budget_exceeded" | "needs_human"
+    Artifacts      []Artifact `json:"artifacts"` // diffs, docs, PR urls
+    TranscriptPath string     `json:"transcript_path"`
+    CostUSD        float64    `json:"cost_usd"`
+    TokensIn       int        `json:"tokens_in"`
+    TokensOut      int        `json:"tokens_out"`
+}
 ```
+
+Serialized as JSON at the boundary — any executor (Go, Python, a shell script) can implement this contract without linking our code. That's what makes it a contract rather than an internal interface.
 
 Any implementation satisfying this is an executor. Phase 5 ships one adapter (Claude Agent SDK). OpenHands and a plain bash runner are alternate adapters behind the same interface — see eval matrix §3.
 
@@ -258,7 +278,28 @@ Secrets never enter prompts (original §16, retained). Secrets live in env/`.env
 
 ## 7. Deployment
 
-`docker-compose.yml`: `postgres` (pgvector), `gbrain-shared`, `gbrain-<isolated-ws>` × N (from a template), `cos` (cron + CLI). VPS deploy = same compose file + a reverse proxy; no code change. That satisfies the original doc's Docker-first principle without a Kubernetes detour.
+`docker-compose.yml`: `postgres` (pgvector), `gbrain-shared`, `gbrain-<isolated-ws>` × N (from a template), `cos` (cron + CLI, the Go binary). VPS deploy = same compose file + a reverse proxy; no code change. That satisfies the original doc's Docker-first principle without a Kubernetes detour.
+
+**Persistence — brain survives `docker compose down`, always.** Two things must never live only inside a container's writable layer:
+
+```yaml
+volumes:
+  pg_data: {}          # named volume — Postgres data dir, survives down/up and image rebuilds
+
+services:
+  postgres:
+    image: postgres:17
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  gbrain-shared:
+    volumes:
+      - ./brains/shared:/brain      # bind mount — host path, this is the git repo
+```
+
+- **Postgres data → named volume**, not a bind mount and never anonymous. `docker compose down` (no `-v`) leaves it untouched; only an explicit `docker compose down -v` destroys it — a different, deliberate command, not an accident of restart.
+- **Brain markdown → bind mount to a host path** (`./brains/<workspace>/`), because that path is a git repo you back up and push independently of Docker entirely. This is what makes the portability test (§3.3) meaningful — the truth lives on the host filesystem, containers are disposable compute over it.
+- `docker compose down && docker compose up` — or a full image rebuild — must leave both untouched. Only `-v` or `rm -rf ./brains` destroys data, and both are things you'd do on purpose.
 
 ---
 
