@@ -11,9 +11,13 @@ import (
 
 // topPagesForContext caps how many full pages we fetch and inline — this is
 // the token-cost lever from docs/02-technical-design.md §3.4 (context_refs,
-// not inlined content). 5 is generous for Phase 0's small corpus; revisit
-// once real workspace brains are much larger.
-const topPagesForContext = 5
+// not inlined content). Raised from 5 to 10 after root-causing 2 eval
+// failures (docs/03-gap-analysis.md G22): the correct source doc was
+// present in query()'s ranked results but outside the top 5, so it never
+// reached getPage()/synthesis at all — a retrieval-depth bug, not a
+// synthesis one. 10 is still a guess, not a measured optimum; revisit with
+// real usage data once workspace brains are much larger than this corpus.
+const topPagesForContext = 10
 
 func gbrainClientFromEnv() (*gbrainClient, error) {
 	url := os.Getenv("GBRAIN_URL")
